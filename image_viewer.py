@@ -1,9 +1,12 @@
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget, QScrollArea
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 
 class ImageViewer(QWidget):
     """Widget for displaying images with scroll area and zoom support"""
+    
+    # Signals
+    image_modified = pyqtSignal(object)  # Emits the current pixmap when image is modified
     
     def __init__(self):
         super().__init__()
@@ -50,6 +53,8 @@ class ImageViewer(QWidget):
         """Set the image to display"""
         self.original_pixmap = pixmap
         self.reset_zoom()
+        # Emit signal that image has been modified
+        self.image_modified.emit(pixmap)
         
     def set_zoom(self, zoom_level):
         """Set the zoom level (1.0 = 100%)"""
@@ -133,4 +138,6 @@ class ImageViewer(QWidget):
         self.original_pixmap = None
         self.image_label.clear()
         self.image_label.setText("No image loaded\nClick 'Load Image' to select a file")
-        self.image_container.setMinimumSize(400, 300) 
+        self.image_container.setMinimumSize(400, 300)
+        # Emit signal that image has been cleared
+        self.image_modified.emit(None) 

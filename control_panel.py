@@ -1,6 +1,7 @@
 from PyQt6.QtWidgets import (QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
                              QSlider, QSpinBox, QGroupBox, QGridLayout, QLabel)
 from PyQt6.QtCore import Qt, pyqtSignal
+from histogram_widget import HistogramWidget
 
 class ControlPanel(QWidget):
     """Right-side control panel for HistoEdit"""
@@ -62,6 +63,10 @@ class ControlPanel(QWidget):
         
         layout.addWidget(zoom_group)
         
+        # Add histogram widget
+        self.histogram_widget = HistogramWidget()
+        layout.addWidget(self.histogram_widget)
+        
         # Add stretch to push controls to top
         layout.addStretch()
         
@@ -84,4 +89,8 @@ class ControlPanel(QWidget):
         """Set the zoom level (1.0 = 100%)"""
         zoom_percent = int(zoom_level * 100)
         self.zoom_slider.setValue(zoom_percent)
-        self.zoom_spinbox.setValue(zoom_percent) 
+        self.zoom_spinbox.setValue(zoom_percent)
+        
+    def set_image(self, pixmap):
+        """Set the image for the histogram widget"""
+        self.histogram_widget.set_image(pixmap) 

@@ -51,6 +51,9 @@ class HistoEditMainWindow(QMainWindow):
         self.control_panel.zoom_changed.connect(self.image_viewer.set_zoom)
         self.control_panel.load_image_requested.connect(self.load_image)
         
+        # Image viewer signals
+        self.image_viewer.image_modified.connect(self.control_panel.set_image)
+        
         # Menu bar signals
         self.menu_bar.set_signals(self.load_image, self.close)
         
@@ -75,6 +78,9 @@ class HistoEditMainWindow(QMainWindow):
             if pixmap:
                 # Set the image in the viewer
                 self.image_viewer.set_image(pixmap)
+                
+                # Update histogram widget
+                self.control_panel.set_image(pixmap)
                 
                 # Calculate fit-to-window zoom
                 self.image_viewer.calculate_fit_to_window_zoom()
