@@ -113,6 +113,15 @@ class HistogramContainer(QWidget):
         # Draw histogram
         bar_width = hist_width / 256
         
+        # Apply logarithmic scaling to histogram values
+        # Add 1 to avoid log(0) and ensure all values are positive
+        log_red = np.log(self.parent_widget.red_histogram + 1)
+        log_green = np.log(self.parent_widget.green_histogram + 1)
+        log_blue = np.log(self.parent_widget.blue_histogram + 1)
+        
+        # Find maximum log value for normalization
+        max_log_value = max(np.max(log_red), np.max(log_green), np.max(log_blue))
+        
         # Draw red histogram (50% transparency fill, 90% transparency line)
         red_fill = QColor(255, 0, 0, 128)  # 50% transparency
         red_line = QColor(255, 0, 0, 26)   # 90% transparency
@@ -122,7 +131,8 @@ class HistogramContainer(QWidget):
         
         for i in range(256):
             x = hist_x + i * bar_width
-            normalized_height = (self.parent_widget.red_histogram[i] / max_value) * hist_height
+            # Use logarithmic normalization
+            normalized_height = (log_red[i] / max_log_value) * hist_height
             y = hist_y + hist_height - normalized_height
             painter.drawRect(QRect(int(x), int(y), int(bar_width), int(normalized_height)))
             
@@ -135,7 +145,8 @@ class HistogramContainer(QWidget):
         
         for i in range(256):
             x = hist_x + i * bar_width
-            normalized_height = (self.parent_widget.green_histogram[i] / max_value) * hist_height
+            # Use logarithmic normalization
+            normalized_height = (log_green[i] / max_log_value) * hist_height
             y = hist_y + hist_height - normalized_height
             painter.drawRect(QRect(int(x), int(y), int(bar_width), int(normalized_height)))
             
@@ -148,7 +159,8 @@ class HistogramContainer(QWidget):
         
         for i in range(256):
             x = hist_x + i * bar_width
-            normalized_height = (self.parent_widget.blue_histogram[i] / max_value) * hist_height
+            # Use logarithmic normalization
+            normalized_height = (log_blue[i] / max_log_value) * hist_height
             y = hist_y + hist_height - normalized_height
             painter.drawRect(QRect(int(x), int(y), int(bar_width), int(normalized_height)))
             
@@ -227,7 +239,7 @@ class HistogramWidget(QWidget):
         layout.setContentsMargins(10, 10, 10, 10)
         
         # Title label with black text on white background
-        title_label = QLabel("Image Histogram")
+        title_label = QLabel("Image Histogram (Log Scale)")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_label.setStyleSheet("font-weight: bold; font-size: 14px; margin-bottom: 10px; color: black; background-color: white; padding: 5px; border-radius: 3px; border: 1px solid #ccc;")
         layout.addWidget(title_label)
