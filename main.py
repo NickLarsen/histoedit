@@ -54,6 +54,9 @@ class HistoEditMainWindow(QMainWindow):
         # Image viewer signals
         self.image_viewer.image_modified.connect(self.control_panel.set_image)
         
+        # Histogram widget signals
+        self.control_panel.histogram_widget.highlight_changed.connect(self.update_highlight_overlay)
+        
         # Menu bar signals
         self.menu_bar.set_signals(self.load_image, self.close)
         
@@ -100,6 +103,24 @@ class HistoEditMainWindow(QMainWindow):
                 # Handle error
                 print(f"Error loading image: {error}")
                 # You could add a status bar or dialog to show this error
+                
+    def update_highlight_overlay(self):
+        """Update the highlight overlay when histogram highlight changes"""
+        # Get the highlighted image from the histogram widget
+        highlighted_array = self.control_panel.histogram_widget.get_highlighted_image()
+        
+        if highlighted_array is not None:
+            # Get highlight parameters from histogram widget
+            histogram_widget = self.control_panel.histogram_widget
+            center = histogram_widget.highlight_center
+            width = histogram_widget.highlight_width
+            enabled = histogram_widget.highlight_enabled
+            
+            # Set the highlighted image in the viewer with parameters
+            self.image_viewer.set_highlighted_image(highlighted_array, center, width, enabled)
+        else:
+            # Clear the highlight if none is available
+            self.image_viewer.clear_highlight()
 
 def main():
     app = QApplication(sys.argv)

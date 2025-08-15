@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
 from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QPixmap
-from PyQt6.QtCore import Qt, QRect
+from PyQt6.QtCore import Qt, QRect, pyqtSignal
 import numpy as np
 
 class HistogramContainer(QWidget):
@@ -22,6 +22,8 @@ class HistogramContainer(QWidget):
                 self.parent_widget.is_highlighting = True
                 self.update_highlight_from_mouse(event.pos())
                 self.update()
+                # Emit signal for highlight change
+                self.parent_widget.highlight_changed.emit()
             else:
                 # Click while locked: unlock
                 self.parent_widget.is_locked = False
@@ -37,10 +39,14 @@ class HistogramContainer(QWidget):
             # Update highlight while dragging
             self.update_highlight_from_mouse(event.pos())
             self.update()
+            # Emit signal for highlight change
+            self.parent_widget.highlight_changed.emit()
         elif not self.parent_widget.is_locked:
             # Update highlight in real-time when not locked
             self.update_highlight_from_mouse(event.pos())
             self.update()
+            # Emit signal for highlight change
+            self.parent_widget.highlight_changed.emit()
             
     def mouseReleaseEvent(self, event):
         """Handle mouse release events"""
@@ -53,6 +59,8 @@ class HistogramContainer(QWidget):
             self.parent_widget.is_locked = True
             self.parent_widget.lock_button.setChecked(True)
             self.parent_widget.lock_button.setText("🔒")
+            # Emit signal for highlight change
+            self.parent_widget.highlight_changed.emit()
             
     def update_highlight_from_mouse(self, pos):
         """Update highlight area based on mouse position"""
@@ -188,6 +196,9 @@ class HistogramContainer(QWidget):
 class HistogramWidget(QWidget):
     """Widget for displaying RGB histograms with transparency"""
     
+    # Signals
+    highlight_changed = pyqtSignal()  # Emitted when highlight area changes
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setup_ui()
@@ -196,6 +207,9 @@ class HistogramWidget(QWidget):
         self.red_histogram = None
         self.green_histogram = None
         self.blue_histogram = None
+        
+        # Store original image data for processing
+        self.original_image_array = None
         
         # Highlight state
         self.highlight_enabled = True
@@ -257,6 +271,8 @@ class HistogramWidget(QWidget):
         else:
             self.toggle_button.setText("Enable Highlighting")
         self.histogram_container.update()
+        # Emit signal for highlight change
+        self.highlight_changed.emit()
         
     def toggle_lock(self):
         """Toggle lock state"""
@@ -282,6 +298,9 @@ class HistogramWidget(QWidget):
         ptr.setsize(height * width * 4)  # 4 bytes per pixel (RGBA)
         arr = np.frombuffer(ptr, np.uint8).reshape((height, width, 4))
         
+        # Store original image data for processing
+        self.original_image_array = arr.copy()
+        
         # Calculate histograms for each channel
         self.red_histogram = np.histogram(arr[:, :, 0], bins=256, range=(0, 256))[0]
         self.green_histogram = np.histogram(arr[:, :, 1], bins=256, range=(0, 256))[0]
@@ -290,9 +309,88 @@ class HistogramWidget(QWidget):
         # Update the display
         self.histogram_container.update()
         
+    def get_highlight_mask(self):
+        """Get a boolean mask indicating which pixels are in the highlight area"""
+        if self.original_image_array is None or not self.highlight_enabled:
+            return None
+            
+        height, width = self.original_image_array.shape[:2]
+        mask = np.zeros((height, width), dtype=bool)
+        
+        # Calculate highlight bounds in pixel coordinates
+        center_x = int(self.highlight_center * width)
+        half_width = int((self.highlight_width * width) / 2)
+        
+        left_x = max(0, center_x - half_width)
+        right_x = min(width, center_x + half_width)
+        
+        # Create mask for highlighted area
+        mask[:, left_x:right_x] = True
+        
+        return mask
+        
+    def get_highlighted_image(self):
+        """Get the image with highlight overlay and brightness adjustment"""
+        if self.original_image_array is None or not self.highlight_enabled:
+            return None
+            
+        # Get the highlight mask for spatial region
+        mask = self.get_highlight_mask()
+        if mask is None:
+            return None
+            
+        # Calculate the value range that corresponds to the highlighted spatial region
+        # We'll analyze the histogram data in the highlighted area to determine value ranges
+        height, width = self.original_image_array.shape[:2]
+        
+        # Get the highlighted spatial region
+        center_x = int(self.highlight_center * width)
+        half_width = int((self.highlight_width * width) / 2)
+        left_x = max(0, center_x - half_width)
+        right_x = min(width, center_x + half_width)
+        
+        # Extract the highlighted region
+        highlighted_region = self.original_image_array[:, left_x:right_x, :3]  # RGB channels only
+        
+        # Calculate value ranges for each channel in the highlighted region
+        value_ranges = {}
+        for channel_idx, channel_name in enumerate(['red', 'green', 'blue']):
+            channel_data = highlighted_region[:, :, channel_idx]
+            
+            if channel_data.size > 0:
+                min_val = np.min(channel_data)
+                max_val = np.max(channel_data)
+                value_ranges[channel_name] = (min_val, max_val)
+            else:
+                value_ranges[channel_name] = (0, 255)
+        
+        # Create a copy of the original image for processing
+        result = self.original_image_array.copy()
+        
+        # Apply brightness adjustment to pixels that fall within the value ranges
+        for channel_idx, channel_name in enumerate(['red', 'green', 'blue']):
+            min_val, max_val = value_ranges[channel_name]
+            
+            if max_val > min_val:
+                # Calculate the offset needed to stretch the range to full dynamic range
+                # We want to make the current max value become 255
+                offset = 255 - max_val
+                
+                # Find all pixels in the entire image that fall within this value range
+                channel_data = result[:, :, channel_idx]
+                value_mask = (channel_data >= min_val) & (channel_data <= max_val)
+                
+                # Apply the offset to pixels in the value range
+                channel_data[value_mask] = np.clip(
+                    channel_data[value_mask] + offset, 0, 255
+                ).astype(np.uint8)
+        
+        return result
+        
     def clear_histogram(self):
         """Clear the histogram data"""
         self.red_histogram = None
         self.green_histogram = None
         self.blue_histogram = None
+        self.original_image_array = None
         self.histogram_container.update() 
