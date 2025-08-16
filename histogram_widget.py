@@ -597,7 +597,6 @@ class HistogramWidget(QWidget):
         red_mask = (red_channel >= left_bin) & (red_channel <= right_bin)
         
         # Only include masks for enabled channels
-        mask = np.zeros((height, width), dtype=bool)
         if self.blue_channel_enabled:
             mask |= blue_mask
         if self.green_channel_enabled:
