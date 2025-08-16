@@ -60,6 +60,11 @@ class HistoEditMainWindow(QMainWindow):
         # Menu bar signals
         self.menu_bar.set_signals(self.load_image, self.close)
         
+        # Application quit signal
+        app = QApplication.instance()
+        if app:
+            app.aboutToQuit.connect(self.cleanup_resources)
+        
     def setup_application_icon(self):
         """Setup the application icon"""
         try:
@@ -103,6 +108,21 @@ class HistoEditMainWindow(QMainWindow):
                 # Handle error
                 print(f"Error loading image: {error}")
                 # You could add a status bar or dialog to show this error
+                
+    def cleanup_resources(self):
+        """Clean up resources before application quits"""
+        try:
+            if hasattr(self, 'control_panel') and hasattr(self.control_panel, 'histogram_widget'):
+                histogram_widget = self.control_panel.histogram_widget
+                if hasattr(histogram_widget, 'image_processor') and histogram_widget.image_processor.isRunning():
+                    histogram_widget.image_processor.stop()
+        except Exception as e:
+            print(f"Warning: Error during cleanup: {e}")
+            
+    def closeEvent(self, event):
+        """Clean up resources when window is closed"""
+        self.cleanup_resources()
+        super().closeEvent(event)
                 
     def update_highlight_overlay(self):
         """Update the highlight overlay when histogram highlight changes"""

@@ -1,7 +1,132 @@
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QScrollBar, QComboBox
 from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QPixmap
-from PyQt6.QtCore import Qt, QRect, pyqtSignal
+from PyQt6.QtCore import Qt, QRect, pyqtSignal, QThread, QTimer, QMutex, QWaitCondition
 import numpy as np
+import time
+
+class ImageProcessorThread(QThread):
+    """Background thread for processing image operations"""
+    
+    # Signal to emit processed results
+    processing_complete = pyqtSignal(object, object, object)  # mask, highlighted_array, pixel_count
+    
+    def __init__(self):
+        super().__init__()
+        self.mutex = QMutex()
+        self.wait_condition = QWaitCondition()
+        self.running = True
+        self.pending_work = False
+        self.current_params = None
+        
+    def run(self):
+        """Main thread loop"""
+        while self.running:
+            try:
+                self.mutex.lock()
+                if not self.pending_work:
+                    self.wait_condition.wait(self.mutex)
+                if not self.running:
+                    self.mutex.unlock()
+                    break
+                    
+                # Get current parameters
+                params = self.current_params
+                self.pending_work = False
+                self.mutex.unlock()
+                
+                if params:
+                    # Process the image
+                    mask, highlighted_array, pixel_count = self.process_image(params)
+                    # Emit results only if still running
+                    if self.running:
+                        self.processing_complete.emit(mask, highlighted_array, pixel_count)
+            except Exception as e:
+                # Handle any errors gracefully
+                print(f"Warning: Error in image processing thread: {e}")
+                if self.mutex.isLocked():
+                    self.mutex.unlock()
+                if not self.running:
+                    break
+                
+    def process_image(self, params):
+        """Process image with given parameters"""
+        image_array = params['image_array']
+        highlight_center = params['highlight_center']
+        highlight_width = params['highlight_width']
+        red_enabled = params['red_enabled']
+        green_enabled = params['green_enabled']
+        blue_enabled = params['blue_enabled']
+        
+        height, width = image_array.shape[:2]
+        
+        # Early exit if no channels are enabled
+        if not (red_enabled or green_enabled or blue_enabled):
+            empty_mask = np.zeros((height, width), dtype=bool)
+            result = np.array(image_array, copy=True, dtype=np.uint8, order='C')
+            return empty_mask, result, 0
+        
+        # Calculate the histogram value range
+        center_bin = int(highlight_center * 255)
+        half_width_bins = int((highlight_width * 255) / 2)
+        
+        left_bin = max(0, center_bin - half_width_bins)
+        right_bin = min(255, center_bin + half_width_bins)
+        
+        # Use numpy's efficient boolean operations
+        mask = np.zeros((height, width), dtype=bool)
+        
+        if blue_enabled:
+            mask |= ((image_array[:, :, 0] >= left_bin) & (image_array[:, :, 0] <= right_bin))
+        if green_enabled:
+            mask |= ((image_array[:, :, 1] >= left_bin) & (image_array[:, :, 1] <= right_bin))
+        if red_enabled:
+            mask |= ((image_array[:, :, 2] >= left_bin) & (image_array[:, :, 2] <= right_bin))
+        
+        # Create highlighted image efficiently
+        if np.any(mask):
+            # Only create a copy if we need to modify it
+            result = np.array(image_array, copy=True, dtype=np.uint8, order='C')
+            # Use advanced indexing for better performance
+            result[mask, :3] = 255  # Set RGB channels to 255 for highlighted pixels
+        else:
+            # No highlighting needed, return original
+            result = image_array
+        
+        pixel_count = np.sum(mask)
+        
+        return mask, result, pixel_count
+        
+    def request_processing(self, params):
+        """Request image processing with new parameters"""
+        self.mutex.lock()
+        # Cancel any pending work and start fresh
+        self.pending_work = False
+        self.current_params = params
+        self.pending_work = True
+        self.wait_condition.wakeAll()
+        self.mutex.unlock()
+        
+
+        
+    def stop(self):
+        """Stop the thread"""
+        try:
+            self.mutex.lock()
+            self.running = False
+            self.wait_condition.wakeAll()
+            self.mutex.unlock()
+            
+            # Wait for thread to finish, but with timeout
+            if self.isRunning():
+                self.wait(1000)  # Wait up to 1 second
+                
+                # Force quit if still running
+                if self.isRunning():
+                    self.terminate()
+                    self.wait(500)  # Give it a bit more time
+        except RuntimeError:
+            # Handle case where Qt objects are already destroyed
+            pass
 
 class HistogramContainer(QWidget):
     """Container widget that handles histogram painting"""
@@ -22,9 +147,7 @@ class HistogramContainer(QWidget):
                 self.parent_widget.is_highlighting = True
                 self.update_highlight_from_mouse(event.pos())
                 self.update()
-                self.parent_widget.update_pixel_counter()
-                # Emit signal for highlight change
-                self.parent_widget.highlight_changed.emit()
+                self.parent_widget.request_highlight_update()
             else:
                 # Click while locked: unlock
                 self.parent_widget.is_locked = False
@@ -40,16 +163,12 @@ class HistogramContainer(QWidget):
             # Update highlight while dragging
             self.update_highlight_from_mouse(event.pos())
             self.update()
-            self.parent_widget.update_pixel_counter()
-            # Emit signal for highlight change
-            self.parent_widget.highlight_changed.emit()
+            self.parent_widget.request_highlight_update()
         elif not self.parent_widget.is_locked:
             # Update highlight in real-time when not locked
             self.update_highlight_from_mouse(event.pos())
             self.update()
-            self.parent_widget.update_pixel_counter()
-            # Emit signal for highlight change
-            self.parent_widget.highlight_changed.emit()
+            self.parent_widget.request_highlight_update()
             
     def mouseReleaseEvent(self, event):
         """Handle mouse release events"""
@@ -62,9 +181,7 @@ class HistogramContainer(QWidget):
             self.parent_widget.is_locked = True
             self.parent_widget.lock_button.setChecked(True)
             self.parent_widget.lock_button.setText("🔒")
-            self.parent_widget.update_pixel_counter()
-            # Emit signal for highlight change
-            self.parent_widget.highlight_changed.emit()
+            self.parent_widget.request_highlight_update()
             
     def update_highlight_from_mouse(self, pos):
         """Update highlight area based on mouse position"""
@@ -307,6 +424,24 @@ class HistogramWidget(QWidget):
         # Title: 35 + Control Panel: 80 + Histogram: 240 + Scroll: 50 + Counter: 70 + Spacing: 50 = 525
         self.setFixedHeight(525)
         
+        # Initialize background thread
+        self.image_processor = ImageProcessorThread()
+        self.image_processor.processing_complete.connect(self.on_image_processing_complete)
+        self.image_processor.start()
+        
+        # Add debouncing timer and caching
+        self.debounce_timer = QTimer()
+        self.debounce_timer.setSingleShot(True)
+        self.debounce_timer.timeout.connect(self.process_highlight_update)
+        
+        # Cache for processed results
+        self.highlight_mask = None
+        self.highlighted_image = None
+        self.current_pixel_count = 0
+        
+        # Cache key for avoiding redundant processing
+        self.last_cache_key = None
+        
     def setup_ui(self):
         """Setup the histogram widget UI"""
         layout = QVBoxLayout(self)
@@ -472,19 +607,32 @@ class HistogramWidget(QWidget):
         self.histogram_container.update()
         self.update_pixel_counter()
         
+        # Force immediate update when zoom changes
+        self.force_highlight_update()
+        
     def on_scroll_changed(self, value):
         """Handle scroll bar changes"""
         self.scroll_position = value / 100.0
         self.histogram_container.update()
         self.update_pixel_counter()
         
+        # Force immediate update when scroll changes
+        self.force_highlight_update()
+        
     def toggle_highlighting(self):
         """Toggle highlighting on/off"""
         self.highlight_enabled = not self.highlight_enabled
         if self.highlight_enabled:
             self.toggle_button.setText("Disable Highlighting")
+            # Force immediate update when enabling highlighting
+            self.force_highlight_update()
         else:
             self.toggle_button.setText("Enable Highlighting")
+            # Clear cache when disabling highlighting
+            self.highlight_mask = None
+            self.highlighted_image = None
+            self.current_pixel_count = 0
+            self.last_cache_key = None
         self.histogram_container.update()
         self.update_pixel_counter()
         # Emit signal for highlight change
@@ -503,24 +651,24 @@ class HistogramWidget(QWidget):
         self.red_channel_enabled = not self.red_channel_enabled
         self.red_toggle.setChecked(self.red_channel_enabled)
         self.histogram_container.update()
-        self.update_pixel_counter()
-        self.highlight_changed.emit()
+        # Force immediate update when toggling channels
+        self.force_highlight_update()
         
     def toggle_green_channel(self):
         """Toggle the green channel on/off"""
         self.green_channel_enabled = not self.green_channel_enabled
         self.green_toggle.setChecked(self.green_channel_enabled)
         self.histogram_container.update()
-        self.update_pixel_counter()
-        self.highlight_changed.emit()
+        # Force immediate update when toggling channels
+        self.force_highlight_update()
         
     def toggle_blue_channel(self):
         """Toggle the blue channel on/off"""
         self.blue_channel_enabled = not self.blue_channel_enabled
         self.blue_toggle.setChecked(self.blue_channel_enabled)
         self.histogram_container.update()
-        self.update_pixel_counter()
-        self.highlight_changed.emit()
+        # Force immediate update when toggling channels
+        self.force_highlight_update()
         
     def set_image(self, pixmap):
         """Calculate and display histogram for the given image"""
@@ -563,6 +711,12 @@ class HistogramWidget(QWidget):
         self.green_toggle.setChecked(True)
         self.blue_toggle.setChecked(True)
         
+        # Clear cache for new image
+        self.highlight_mask = None
+        self.highlighted_image = None
+        self.current_pixel_count = 0
+        self.last_cache_key = None
+        
         # Update the display
         self.histogram_container.update()
         self.update_pixel_counter()
@@ -572,6 +726,11 @@ class HistogramWidget(QWidget):
         if self.original_image_array is None or not self.highlight_enabled:
             return None
             
+        # Return cached mask if available
+        if self.highlight_mask is not None:
+            return self.highlight_mask.copy()
+            
+        # Fallback to real-time calculation if no cache
         height, width = self.original_image_array.shape[:2]
         mask = np.zeros((height, width), dtype=bool)
         
@@ -611,6 +770,11 @@ class HistogramWidget(QWidget):
         if self.original_image_array is None or not self.highlight_enabled:
             return None
             
+        # Return cached highlighted image if available
+        if self.highlighted_image is not None:
+            return self.highlighted_image.copy()
+            
+        # Fallback to real-time calculation if no cache
         # Get the highlight mask for pixels with values in the highlighted range
         mask = self.get_highlight_mask()
         if mask is None:
@@ -639,15 +803,17 @@ class HistogramWidget(QWidget):
             self.total_pixel_label.setText("Total image pixels: 0")
             return
             
-        # Get the current highlight mask
-        mask = self.get_highlight_mask()
-        if mask is None:
-            self.pixel_counter_label.setText("Pixels in selected range: 0")
-            self.total_pixel_label.setText("Total image pixels: 0")
-            return
-            
-        # Count the number of True pixels in the mask
-        pixel_count = np.sum(mask)
+        # Use cached pixel count if available
+        if self.highlight_mask is not None:
+            pixel_count = self.current_pixel_count
+        else:
+            # Fallback to real-time calculation
+            mask = self.get_highlight_mask()
+            if mask is None:
+                self.pixel_counter_label.setText("Pixels in selected range: 0")
+                self.total_pixel_label.setText("Total image pixels: 0")
+                return
+            pixel_count = np.sum(mask)
         
         # Calculate total pixels in the image
         total_pixels = self.original_image_array.shape[0] * self.original_image_array.shape[1]
@@ -666,4 +832,90 @@ class HistogramWidget(QWidget):
         self.blue_histogram = None
         self.original_image_array = None
         self.histogram_container.update()
-        self.update_pixel_counter() 
+        self.update_pixel_counter()
+        
+    def closeEvent(self, event):
+        """Clean up resources when widget is closed"""
+        if hasattr(self, 'image_processor') and self.image_processor.isRunning():
+            self.image_processor.stop()
+        super().closeEvent(event)
+        
+    def hideEvent(self, event):
+        """Clean up when widget is hidden"""
+        if hasattr(self, 'image_processor') and self.image_processor.isRunning():
+            self.image_processor.stop()
+        super().hideEvent(event) 
+
+    def on_image_processing_complete(self, mask, highlighted_array, pixel_count):
+        """Handle results from the background image processor"""
+        self.highlight_mask = mask
+        self.highlighted_image = highlighted_array
+        self.current_pixel_count = pixel_count
+        self.update_pixel_counter()
+        self.histogram_container.update()
+        self.update()
+        
+
+        
+        # Emit signal to update the image viewer
+        self.highlight_changed.emit()
+        
+    def process_highlight_update(self):
+        """Process highlight update after debouncing"""
+        if not self.highlight_enabled or self.original_image_array is None:
+            return
+            
+        # Create cache key to avoid redundant processing
+        cache_key = (
+            self.highlight_center,
+            self.highlight_width,
+            self.red_channel_enabled,
+            self.green_channel_enabled,
+            self.blue_channel_enabled
+        )
+        
+        # Check if we can use cached results
+        if cache_key == self.last_cache_key and self.highlighted_image is not None:
+            # Use cached results
+            self.update_pixel_counter()
+            self.histogram_container.update()
+            self.highlight_changed.emit()
+            return
+            
+        # Request processing from background thread
+        params = {
+            'image_array': self.original_image_array,
+            'highlight_center': self.highlight_center,
+            'highlight_width': self.highlight_width,
+            'red_enabled': self.red_channel_enabled,
+            'green_enabled': self.green_channel_enabled,
+            'blue_enabled': self.blue_channel_enabled
+        }
+        
+        self.image_processor.request_processing(params)
+        self.last_cache_key = cache_key
+        
+
+        
+    def request_highlight_update(self):
+        """Request a highlight update with debouncing"""
+        # Only start timer if not already running and thread is available
+        if not self.debounce_timer.isActive() and self.image_processor.isRunning():
+            self.debounce_timer.start(50)  # 50ms debounce delay
+            
+    def force_highlight_update(self):
+        """Force an immediate highlight update, bypassing debouncing"""
+        # Stop any pending debounced updates
+        self.debounce_timer.stop()
+        
+        # Clear cache to force fresh processing
+        self.highlight_mask = None
+        self.highlighted_image = None
+        self.current_pixel_count = 0
+        self.last_cache_key = None
+        
+        # Process immediately
+        self.process_highlight_update()
+        
+        # For immediate feedback, also emit signal now (will be updated again when background completes)
+        self.highlight_changed.emit() 
