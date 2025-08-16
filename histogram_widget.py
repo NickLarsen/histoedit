@@ -22,6 +22,7 @@ class HistogramContainer(QWidget):
                 self.parent_widget.is_highlighting = True
                 self.update_highlight_from_mouse(event.pos())
                 self.update()
+                self.parent_widget.update_pixel_counter()
                 # Emit signal for highlight change
                 self.parent_widget.highlight_changed.emit()
             else:
@@ -39,12 +40,14 @@ class HistogramContainer(QWidget):
             # Update highlight while dragging
             self.update_highlight_from_mouse(event.pos())
             self.update()
+            self.parent_widget.update_pixel_counter()
             # Emit signal for highlight change
             self.parent_widget.highlight_changed.emit()
         elif not self.parent_widget.is_locked:
             # Update highlight in real-time when not locked
             self.update_highlight_from_mouse(event.pos())
             self.update()
+            self.parent_widget.update_pixel_counter()
             # Emit signal for highlight change
             self.parent_widget.highlight_changed.emit()
             
@@ -59,6 +62,7 @@ class HistogramContainer(QWidget):
             self.parent_widget.is_locked = True
             self.parent_widget.lock_button.setChecked(True)
             self.parent_widget.lock_button.setText("🔒")
+            self.parent_widget.update_pixel_counter()
             # Emit signal for highlight change
             self.parent_widget.highlight_changed.emit()
             
@@ -70,7 +74,7 @@ class HistogramContainer(QWidget):
         hist_width = self.width() - 20
         hist_height = self.height() - 20
         
-        # Calculate center position (0.0 to 1.0)
+        # Calculate center position (0.0 to 1.0) - maps to histogram value range 0-255
         if hist_width > 0:
             relative_x = (pos.x() - hist_x) / hist_width
             self.parent_widget.highlight_center = max(0.0, min(1.0, relative_x))
@@ -79,6 +83,7 @@ class HistogramContainer(QWidget):
         if hist_height > 0:
             relative_y = (pos.y() - hist_y) / hist_height
             # Linear progression: top (1.0) = 10% width, bottom (0.0) = 0% width
+            # This controls how wide the histogram value range is
             self.parent_widget.highlight_width = (1.0 - relative_y) * 0.1
         
     def paintEvent(self, event):
@@ -98,7 +103,8 @@ class HistogramContainer(QWidget):
         hist_x = 10
         hist_y = 10
         hist_width = self.width() - 20
-        hist_height = self.height() - 20
+        # Reserve space at bottom for axis labels - reduce histogram height
+        hist_height = self.height() - 40  # 20px top margin + 20px bottom margin for labels
         
         # Find maximum value for normalization
         max_value = max(
@@ -170,15 +176,17 @@ class HistogramContainer(QWidget):
             
         # Draw axis labels with black text for better contrast
         painter.setPen(QColor(0, 0, 0))
-        painter.drawText(hist_x, hist_y + hist_height + 20, "0")
-        painter.drawText(hist_x + hist_width - 20, hist_y + hist_height + 20, "255")
+        # Position labels in the reserved bottom space
+        label_y = hist_y + hist_height + 15  # 15px below histogram, 5px above bottom edge
+        painter.drawText(hist_x, label_y, "0")
+        painter.drawText(hist_x + hist_width - 20, label_y, "255")
         
     def draw_highlight_overlay(self, painter, hist_width, hist_height, hist_x, hist_y):
-        """Draw the highlight overlay with vertical lines and transparency"""
+        """Draw the highlight overlay showing the selected histogram range"""
         if not hasattr(self.parent_widget, 'highlight_width') or self.parent_widget.highlight_width <= 0:
             return
             
-        # Calculate highlight area bounds
+        # Calculate highlight area bounds in histogram coordinates
         center_x = hist_x + (self.parent_widget.highlight_center * hist_width)
         half_width = (self.parent_widget.highlight_width * hist_width) / 2
         
@@ -191,6 +199,14 @@ class HistogramContainer(QWidget):
         
         # Draw right vertical line
         painter.drawLine(right_line_x, hist_y, right_line_x, hist_y + hist_height)
+        
+        # Create semi-transparent overlay to highlight the selected range
+        highlight_brush = QBrush(QColor(255, 255, 0, 80))  # Yellow with 30% opacity
+        
+        # Highlight the selected range
+        if left_line_x < right_line_x:
+            highlight_rect = QRect(left_line_x, hist_y, right_line_x - left_line_x, hist_height)
+            painter.fillRect(highlight_rect, highlight_brush)
         
         # Create semi-transparent overlay to gray out non-highlighted areas
         overlay_brush = QBrush(QColor(128, 128, 128, 180))  # Gray with 70% opacity
@@ -230,8 +246,8 @@ class HistogramWidget(QWidget):
         self.highlight_center = 0.5  # Center position (0.0 to 1.0)
         self.highlight_width = 0.1   # Width as fraction (0.0 to 1.0)
         
-        # Set fixed height as requested
-        self.setFixedHeight(350)
+        # Set fixed height to accommodate histogram + labels
+        self.setFixedHeight(420)
         
     def setup_ui(self):
         """Setup the histogram widget UI"""
@@ -269,11 +285,30 @@ class HistogramWidget(QWidget):
         # Create a container for the histogram area with fixed size
         self.histogram_container = HistogramContainer(self)
         self.histogram_container.setStyleSheet("background-color: white; border: 1px solid #ccc; border-radius: 3px;")
-        self.histogram_container.setFixedHeight(250)  # Give it a proper height
+        self.histogram_container.setFixedHeight(270)  # Increased height to accommodate axis labels
         layout.addWidget(self.histogram_container)
         
-        # Add stretch to push everything to the top
-        layout.addStretch()
+        # Add spacing between histogram and labels
+        spacer = QWidget()
+        spacer.setFixedHeight(55)
+        layout.addWidget(spacer)
+        
+        # Add pixel counter below the histogram
+        self.pixel_counter_label = QLabel("Pixels in selected range: 0")
+        self.pixel_counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.pixel_counter_label.setStyleSheet("font-size: 12px; color: black; background-color: #f0f0f0; padding: 5px; border-radius: 3px; border: 1px solid #ccc;")
+        layout.addWidget(self.pixel_counter_label)
+        
+        # Add spacing between the two labels
+        label_spacer = QWidget()
+        label_spacer.setFixedHeight(5)
+        layout.addWidget(label_spacer)
+        
+        # Add total pixel count and percentage
+        self.total_pixel_label = QLabel("Total image pixels: 0")
+        self.total_pixel_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.total_pixel_label.setStyleSheet("font-size: 11px; color: #666; background-color: #f8f8f8; padding: 3px; border-radius: 2px; border: 1px solid #ddd;")
+        layout.addWidget(self.total_pixel_label)
         
     def toggle_highlighting(self):
         """Toggle highlighting on/off"""
@@ -283,6 +318,7 @@ class HistogramWidget(QWidget):
         else:
             self.toggle_button.setText("Enable Highlighting")
         self.histogram_container.update()
+        self.update_pixel_counter()
         # Emit signal for highlight change
         self.highlight_changed.emit()
         
@@ -320,24 +356,32 @@ class HistogramWidget(QWidget):
         
         # Update the display
         self.histogram_container.update()
+        self.update_pixel_counter()
         
     def get_highlight_mask(self):
-        """Get a boolean mask indicating which pixels are in the highlight area"""
+        """Get a boolean mask indicating which pixels have color channel values in the highlighted histogram range"""
         if self.original_image_array is None or not self.highlight_enabled:
             return None
             
         height, width = self.original_image_array.shape[:2]
         mask = np.zeros((height, width), dtype=bool)
         
-        # Calculate highlight bounds in pixel coordinates
-        center_x = int(self.highlight_center * width)
-        half_width = int((self.highlight_width * width) / 2)
+        # Calculate the histogram value range based on highlight position and width
+        # highlight_center (0.0 to 1.0) maps to histogram bin 0-255
+        center_bin = int(self.highlight_center * 255)
+        half_width_bins = int((self.highlight_width * 255) / 2)
         
-        left_x = max(0, center_x - half_width)
-        right_x = min(width, center_x + half_width)
+        # Calculate the range of histogram bins to highlight
+        left_bin = max(0, center_bin - half_width_bins)
+        right_bin = min(255, center_bin + half_width_bins)
         
-        # Create mask for highlighted area
-        mask[:, left_x:right_x] = True
+        # Create a mask for pixels that fall within this value range
+        # Check if any of the RGB channels fall within the highlighted range
+        for channel_idx in range(3):  # RGB channels only
+            channel_data = self.original_image_array[:, :, channel_idx]
+            # Pixels are highlighted if their value is within the highlighted range
+            channel_mask = (channel_data >= left_bin) & (channel_data <= right_bin)
+            mask = mask | channel_mask  # Combine with OR operation
         
         return mask
         
@@ -346,58 +390,56 @@ class HistogramWidget(QWidget):
         if self.original_image_array is None or not self.highlight_enabled:
             return None
             
-        # Get the highlight mask for spatial region
+        # Get the highlight mask for pixels with values in the highlighted range
         mask = self.get_highlight_mask()
         if mask is None:
             return None
             
-        # Calculate the value range that corresponds to the highlighted spatial region
-        # We'll analyze the histogram data in the highlighted area to determine value ranges
-        height, width = self.original_image_array.shape[:2]
-        
-        # Get the highlighted spatial region
-        center_x = int(self.highlight_center * width)
-        half_width = int((self.highlight_width * width) / 2)
-        left_x = max(0, center_x - half_width)
-        right_x = min(width, center_x + half_width)
-        
-        # Extract the highlighted region
-        highlighted_region = self.original_image_array[:, left_x:right_x, :3]  # RGB channels only
-        
-        # Calculate value ranges for each channel in the highlighted region
-        value_ranges = {}
-        for channel_idx, channel_name in enumerate(['red', 'green', 'blue']):
-            channel_data = highlighted_region[:, :, channel_idx]
-            
-            if channel_data.size > 0:
-                min_val = np.min(channel_data)
-                max_val = np.max(channel_data)
-                value_ranges[channel_name] = (min_val, max_val)
-            else:
-                value_ranges[channel_name] = (0, 255)
-        
         # Create a copy of the original image for processing
         result = self.original_image_array.copy()
         
-        # Apply brightness adjustment to pixels that fall within the value ranges
-        for channel_idx, channel_name in enumerate(['red', 'green', 'blue']):
-            min_val, max_val = value_ranges[channel_name]
-            
-            if max_val > min_val:
-                # Calculate the offset needed to stretch the range to full dynamic range
-                # We want to make the current max value become 255
-                offset = 255 - max_val
-                
-                # Find all pixels in the entire image that fall within this value range
-                channel_data = result[:, :, channel_idx]
-                value_mask = (channel_data >= min_val) & (channel_data <= max_val)
-                
-                # Apply the offset to pixels in the value range
-                channel_data[value_mask] = np.clip(
-                    channel_data[value_mask] + offset, 0, 255
-                ).astype(np.uint8)
+        # Apply brightness adjustment to highlighted pixels
+        # We'll brighten the highlighted pixels to make them more visible
+        brightness_boost = 50  # Increase brightness by this amount
+        
+        # Apply brightness boost to all channels for highlighted pixels
+        for channel_idx in range(3):  # RGB channels only
+            channel_data = result[:, :, channel_idx]
+            # Only modify pixels that are highlighted (mask is True)
+            highlighted_pixels = channel_data[mask]
+            if highlighted_pixels.size > 0:
+                # Boost brightness for highlighted pixels
+                boosted_pixels = np.clip(highlighted_pixels + brightness_boost, 0, 255)
+                channel_data[mask] = boosted_pixels
         
         return result
+        
+    def update_pixel_counter(self):
+        """Update the pixel counter display with the current number of highlighted pixels"""
+        if not self.highlight_enabled or self.original_image_array is None:
+            self.pixel_counter_label.setText("Pixels in selected range: 0")
+            self.total_pixel_label.setText("Total image pixels: 0")
+            return
+            
+        # Get the current highlight mask
+        mask = self.get_highlight_mask()
+        if mask is None:
+            self.pixel_counter_label.setText("Pixels in selected range: 0")
+            self.total_pixel_label.setText("Total image pixels: 0")
+            return
+            
+        # Count the number of True pixels in the mask
+        pixel_count = np.sum(mask)
+        
+        # Calculate total pixels in the image
+        total_pixels = self.original_image_array.shape[0] * self.original_image_array.shape[1]
+        
+        # Calculate percentage
+        percentage = (pixel_count / total_pixels) * 100 if total_pixels > 0 else 0
+        
+        # Update the labels
+        self.pixel_counter_label.setText(f"Pixels in selected range: {pixel_count:,} ({percentage:.1f}%)")
+        self.total_pixel_label.setText(f"Total image pixels: {total_pixels:,}")
         
     def clear_histogram(self):
         """Clear the histogram data"""
@@ -405,4 +447,5 @@ class HistogramWidget(QWidget):
         self.green_histogram = None
         self.blue_histogram = None
         self.original_image_array = None
-        self.histogram_container.update() 
+        self.histogram_container.update()
+        self.update_pixel_counter() 
