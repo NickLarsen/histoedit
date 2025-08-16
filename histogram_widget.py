@@ -478,9 +478,10 @@ class HistogramWidget(QWidget):
         self.original_image_array = arr.copy().astype(np.uint8)
         
         # Calculate histograms for each channel
-        self.red_histogram = np.histogram(arr[:, :, 0], bins=256, range=(0, 256))[0]
-        self.green_histogram = np.histogram(arr[:, :, 1], bins=256, range=(0, 256))[0]
-        self.blue_histogram = np.histogram(arr[:, :, 2], bins=256, range=(0, 256))[0]
+        # Note: QImage.bits() returns BGRA format, not RGBA
+        self.blue_histogram = np.histogram(arr[:, :, 0], bins=256, range=(0, 256))[0]  # Channel 0 = Blue
+        self.green_histogram = np.histogram(arr[:, :, 1], bins=256, range=(0, 256))[0]  # Channel 1 = Green
+        self.red_histogram = np.histogram(arr[:, :, 2], bins=256, range=(0, 256))[0]   # Channel 2 = Red
         
         # Reset zoom and scroll when new image is loaded
         self.zoom_level = 1
@@ -512,11 +513,17 @@ class HistogramWidget(QWidget):
         
         # Create a mask for pixels that fall within this value range
         # Check if any of the RGB channels fall within the highlighted range
-        for channel_idx in range(3):  # RGB channels only
-            channel_data = self.original_image_array[:, :, channel_idx]
-            # Pixels are highlighted if their value is within the highlighted range
-            channel_mask = (channel_data >= left_bin) & (channel_data <= right_bin)
-            mask = mask | channel_mask  # Combine with OR operation
+        # Note: QImage.bits() returns BGRA format, so channels are [Blue, Green, Red, Alpha]
+        blue_channel = self.original_image_array[:, :, 0]   # Blue
+        green_channel = self.original_image_array[:, :, 1]  # Green  
+        red_channel = self.original_image_array[:, :, 2]    # Red
+        
+        # Pixels are highlighted if their value is within the highlighted range
+        blue_mask = (blue_channel >= left_bin) & (blue_channel <= right_bin)
+        green_mask = (green_channel >= left_bin) & (green_channel <= right_bin)
+        red_mask = (red_channel >= left_bin) & (red_channel <= right_bin)
+        
+        mask = blue_mask | green_mask | red_mask  # Combine with OR operation
         
         return mask
         
@@ -539,9 +546,10 @@ class HistogramWidget(QWidget):
             # Create a copy of the mask to avoid any potential reference issues
             mask_copy = mask.copy()
             # Apply white color to highlighted pixels
-            result[mask_copy, 0] = 255  # Red channel = 255
+            # Note: QImage.bits() returns BGRA format, so channels are [Blue, Green, Red, Alpha]
+            result[mask_copy, 0] = 255  # Blue channel = 255
             result[mask_copy, 1] = 255  # Green channel = 255
-            result[mask_copy, 2] = 255  # Blue channel = 255
+            result[mask_copy, 2] = 255  # Red channel = 255
         
         return result
         
