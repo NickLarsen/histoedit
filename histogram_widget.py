@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QScrollBar, QComboBox
 from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QPixmap
 from PyQt6.QtCore import Qt, QRect, pyqtSignal
 import numpy as np
@@ -74,17 +74,28 @@ class HistogramContainer(QWidget):
         hist_width = self.width() - 20
         hist_height = self.height() - 20
         
-        # Calculate center position (0.0 to 1.0) - maps to histogram value range 0-255
+        # Get zoom and scroll information from parent
+        zoom_level = getattr(self.parent_widget, 'zoom_level', 1)
+        scroll_position = getattr(self.parent_widget, 'scroll_position', 0)
+        
+        # Calculate the visible range of histogram values
+        total_visible_bins = 256 // zoom_level
+        start_bin = int(scroll_position * (256 - total_visible_bins))
+        
+        # Calculate center position (0.0 to 1.0) - maps to visible histogram value range
         if hist_width > 0:
             relative_x = (pos.x() - hist_x) / hist_width
-            self.parent_widget.highlight_center = max(0.0, min(1.0, relative_x))
+            # Map relative position to histogram value range, accounting for zoom and scroll
+            visible_center = max(0.0, min(1.0, relative_x))
+            self.parent_widget.highlight_center = (start_bin + visible_center * total_visible_bins) / 255.0
         
         # Calculate width based on vertical position (0.0 to 0.1)
         if hist_height > 0:
             relative_y = (pos.y() - hist_y) / hist_height
             # Linear progression: top (1.0) = 10% width, bottom (0.0) = 0% width
-            # This controls how wide the histogram value range is
-            self.parent_widget.highlight_width = (1.0 - relative_y) * 0.1
+            # Scale the width by zoom level - more zoom = smaller range
+            base_width = (1.0 - relative_y) * 0.1
+            self.parent_widget.highlight_width = base_width / zoom_level
         
     def paintEvent(self, event):
         """Paint the histogram in this container"""
@@ -106,24 +117,33 @@ class HistogramContainer(QWidget):
         # Reserve space at bottom for axis labels - reduce histogram height
         hist_height = self.height() - 40  # 20px top margin + 20px bottom margin for labels
         
-        # Find maximum value for normalization
+        # Get zoom and scroll information from parent
+        zoom_level = getattr(self.parent_widget, 'zoom_level', 1)
+        scroll_position = getattr(self.parent_widget, 'scroll_position', 0)
+        
+        # Calculate the visible range of histogram values
+        total_visible_bins = 256 // zoom_level
+        start_bin = int(scroll_position * (256 - total_visible_bins))
+        end_bin = start_bin + total_visible_bins
+        
+        # Find maximum value for normalization in the visible range
         max_value = max(
-            np.max(self.parent_widget.red_histogram),
-            np.max(self.parent_widget.green_histogram),
-            np.max(self.parent_widget.blue_histogram)
+            np.max(self.parent_widget.red_histogram[start_bin:end_bin]),
+            np.max(self.parent_widget.green_histogram[start_bin:end_bin]),
+            np.max(self.parent_widget.blue_histogram[start_bin:end_bin])
         )
         
         if max_value == 0:
             return
             
         # Draw histogram
-        bar_width = hist_width / 256
+        bar_width = hist_width / total_visible_bins
         
         # Apply logarithmic scaling to histogram values
         # Add 1 to avoid log(0) and ensure all values are positive
-        log_red = np.log(self.parent_widget.red_histogram + 1)
-        log_green = np.log(self.parent_widget.green_histogram + 1)
-        log_blue = np.log(self.parent_widget.blue_histogram + 1)
+        log_red = np.log(self.parent_widget.red_histogram[start_bin:end_bin] + 1)
+        log_green = np.log(self.parent_widget.green_histogram[start_bin:end_bin] + 1)
+        log_blue = np.log(self.parent_widget.blue_histogram[start_bin:end_bin] + 1)
         
         # Find maximum log value for normalization
         max_log_value = max(np.max(log_red), np.max(log_green), np.max(log_blue))
@@ -135,7 +155,7 @@ class HistogramContainer(QWidget):
         painter.setBrush(QBrush(red_fill))
         painter.setPen(QPen(red_line, 1))
         
-        for i in range(256):
+        for i in range(total_visible_bins):
             x = hist_x + i * bar_width
             # Use logarithmic normalization
             normalized_height = (log_red[i] / max_log_value) * hist_height
@@ -149,7 +169,7 @@ class HistogramContainer(QWidget):
         painter.setBrush(QBrush(green_fill))
         painter.setPen(QPen(green_line, 1))
         
-        for i in range(256):
+        for i in range(total_visible_bins):
             x = hist_x + i * bar_width
             # Use logarithmic normalization
             normalized_height = (log_green[i] / max_log_value) * hist_height
@@ -163,7 +183,7 @@ class HistogramContainer(QWidget):
         painter.setBrush(QBrush(blue_fill))
         painter.setPen(QPen(blue_line, 1))
         
-        for i in range(256):
+        for i in range(total_visible_bins):
             x = hist_x + i * bar_width
             # Use logarithmic normalization
             normalized_height = (log_blue[i] / max_log_value) * hist_height
@@ -178,51 +198,68 @@ class HistogramContainer(QWidget):
         painter.setPen(QColor(0, 0, 0))
         # Position labels in the reserved bottom space
         label_y = hist_y + hist_height + 15  # 15px below histogram, 5px above bottom edge
-        painter.drawText(hist_x, label_y, "0")
-        painter.drawText(hist_x + hist_width - 20, label_y, "255")
+        painter.drawText(hist_x, label_y, str(start_bin))
+        painter.drawText(hist_x + hist_width - 30, label_y, str(end_bin))
         
     def draw_highlight_overlay(self, painter, hist_width, hist_height, hist_x, hist_y):
         """Draw the highlight overlay showing the selected histogram range"""
         if not hasattr(self.parent_widget, 'highlight_width') or self.parent_widget.highlight_width <= 0:
             return
             
+        # Get zoom and scroll information from parent
+        zoom_level = getattr(self.parent_widget, 'zoom_level', 1)
+        scroll_position = getattr(self.parent_widget, 'scroll_position', 0)
+        
+        # Calculate the visible range of histogram values
+        total_visible_bins = 256 // zoom_level
+        start_bin = int(scroll_position * (256 - total_visible_bins))
+        
         # Calculate highlight area bounds in histogram coordinates
-        center_x = hist_x + (self.parent_widget.highlight_center * hist_width)
-        half_width = (self.parent_widget.highlight_width * hist_width) / 2
+        # Map highlight center from global histogram space to visible space
+        global_center_bin = self.parent_widget.highlight_center * 255
+        visible_center = (global_center_bin - start_bin) / total_visible_bins
         
-        left_line_x = int(center_x - half_width)
-        right_line_x = int(center_x + half_width)
-        
-        # Draw left vertical line
-        painter.setPen(QPen(QColor(0, 0, 0), 2))
-        painter.drawLine(left_line_x, hist_y, left_line_x, hist_y + hist_height)
-        
-        # Draw right vertical line
-        painter.drawLine(right_line_x, hist_y, right_line_x, hist_y + hist_height)
-        
-        # Create semi-transparent overlay to highlight the selected range
-        highlight_brush = QBrush(QColor(255, 255, 0, 80))  # Yellow with 30% opacity
-        
-        # Highlight the selected range
-        if left_line_x < right_line_x:
-            highlight_rect = QRect(left_line_x, hist_y, right_line_x - left_line_x, hist_height)
-            painter.fillRect(highlight_rect, highlight_brush)
-        
-        # Create semi-transparent overlay to gray out non-highlighted areas
-        overlay_brush = QBrush(QColor(128, 128, 128, 180))  # Gray with 70% opacity
-        
-        # Left gray area
-        if left_line_x > hist_x:
-            left_rect = QRect(hist_x, hist_y, left_line_x - hist_x, hist_height)
-            painter.fillRect(left_rect, overlay_brush)
+        if 0 <= visible_center <= 1:
+            center_x = hist_x + (visible_center * hist_width)
+            half_width = (self.parent_widget.highlight_width * hist_width) / 2
             
-        # Right gray area
-        if right_line_x < hist_x + hist_width:
-            right_rect = QRect(right_line_x, hist_y, (hist_x + hist_width) - right_line_x, hist_height)
-            painter.fillRect(right_rect, overlay_brush)
+            left_line_x = int(center_x - half_width)
+            right_line_x = int(center_x + half_width)
+            
+            # Clamp to histogram bounds
+            left_line_x = max(hist_x, left_line_x)
+            right_line_x = min(hist_x + hist_width, right_line_x)
+            
+            # Draw left vertical line
+            painter.setPen(QPen(QColor(0, 0, 0), 2))
+            painter.drawLine(left_line_x, hist_y, left_line_x, hist_y + hist_height)
+            
+            # Draw right vertical line
+            painter.drawLine(right_line_x, hist_y, right_line_x, hist_y + hist_height)
+            
+            # Create semi-transparent overlay to highlight the selected range
+            highlight_brush = QBrush(QColor(255, 255, 0, 80))  # Yellow with 30% opacity
+            
+            # Highlight the selected range
+            if left_line_x < right_line_x:
+                highlight_rect = QRect(left_line_x, hist_y, right_line_x - left_line_x, hist_height)
+                painter.fillRect(highlight_rect, highlight_brush)
+            
+            # Create semi-transparent overlay to gray out non-highlighted areas
+            overlay_brush = QBrush(QColor(128, 128, 128, 180))  # Gray with 70% opacity
+            
+            # Left gray area
+            if left_line_x > hist_x:
+                left_rect = QRect(hist_x, hist_y, left_line_x - hist_x, hist_height)
+                painter.fillRect(left_rect, overlay_brush)
+                
+            # Right gray area
+            if right_line_x < hist_x + hist_width:
+                right_rect = QRect(right_line_x, hist_y, (hist_x + hist_width) - right_line_x, hist_height)
+                painter.fillRect(right_rect, overlay_brush)
 
 class HistogramWidget(QWidget):
-    """Widget for displaying RGB histograms with transparency"""
+    """Widget for displaying RGB histograms with transparency and zoom functionality"""
     
     # Signals
     highlight_changed = pyqtSignal()  # Emitted when highlight area changes
@@ -246,71 +283,159 @@ class HistogramWidget(QWidget):
         self.highlight_center = 0.5  # Center position (0.0 to 1.0)
         self.highlight_width = 0.1   # Width as fraction (0.0 to 1.0)
         
-        # Set fixed height to accommodate histogram + labels
-        self.setFixedHeight(420)
+        # Zoom and scroll state
+        self.zoom_level = 1  # 1x, 2x, or 3x zoom
+        self.scroll_position = 0.0  # 0.0 to 1.0, represents position in scrollable area
+        
+        # Set fixed height to accommodate histogram + labels + controls
+        # Title: 35 + Control Panel: 80 + Histogram: 240 + Scroll: 50 + Counter: 70 + Spacing: 50 = 525
+        self.setFixedHeight(525)
         
     def setup_ui(self):
         """Setup the histogram widget UI"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)  # Increased spacing between major sections
         
         # Title label with black text on white background
         title_label = QLabel("Image Histogram (Log Scale)")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_label.setStyleSheet("font-weight: bold; font-size: 14px; margin-bottom: 10px; color: black; background-color: white; padding: 5px; border-radius: 3px; border: 1px solid #ccc;")
+        title_label.setStyleSheet("font-weight: bold; font-size: 14px; margin-bottom: 5px; color: black; background-color: white; padding: 5px; border-radius: 3px; border: 1px solid #ccc;")
+        title_label.setFixedHeight(35)
         layout.addWidget(title_label)
         
-        # Add control buttons above the histogram graph area
-        button_layout = QHBoxLayout()
+        # Control panel section
+        control_panel = QWidget()
+        control_panel.setFixedHeight(80)  # Fixed height for control panel
+        control_panel.setStyleSheet("border: 1px solid #ddd; border-radius: 3px;")
+        control_layout = QVBoxLayout(control_panel)
+        control_layout.setContentsMargins(8, 8, 8, 8)
+        control_layout.setSpacing(8)
+        
+        # Highlight controls row
+        highlight_layout = QHBoxLayout()
+        highlight_layout.setSpacing(8)
         
         # Toggle highlight button
         self.toggle_button = QPushButton("Disable Highlighting")
         self.toggle_button.setCheckable(True)
         self.toggle_button.clicked.connect(self.toggle_highlighting)
-        button_layout.addWidget(self.toggle_button)
+        self.toggle_button.setFixedHeight(28)
+        highlight_layout.addWidget(self.toggle_button)
         
         # Lock/unlock button with emoji
         self.lock_button = QPushButton("🔓")  # Unlocked emoji
         self.lock_button.setCheckable(True)
         self.lock_button.clicked.connect(self.toggle_lock)
-        self.lock_button.setFixedSize(40, 30)  # Make it square-ish for the emoji
-        button_layout.addWidget(self.lock_button)
+        self.lock_button.setFixedSize(40, 28)  # Make it square-ish for the emoji
+        highlight_layout.addWidget(self.lock_button)
         
-        button_layout.addStretch()  # Push buttons to the left
-        layout.addLayout(button_layout)
+        highlight_layout.addStretch()  # Push buttons to the left
+        control_layout.addLayout(highlight_layout)
         
-        # Add some spacing between buttons and histogram
-        layout.addSpacing(10)
+        # Zoom controls row
+        zoom_layout = QHBoxLayout()
+        zoom_layout.setSpacing(8)
         
-        # Create a container for the histogram area with fixed size
+        zoom_label = QLabel("Zoom Level:")
+        zoom_label.setFixedWidth(80)
+        zoom_layout.addWidget(zoom_label)
+        
+        # Zoom level selector
+        self.zoom_combo = QComboBox()
+        self.zoom_combo.addItems(["1x", "2x", "3x"])
+        self.zoom_combo.setCurrentText("1x")
+        self.zoom_combo.currentTextChanged.connect(self.on_zoom_changed)
+        self.zoom_combo.setFixedHeight(28)
+        zoom_layout.addWidget(self.zoom_combo)
+        
+        zoom_layout.addStretch()
+        control_layout.addLayout(zoom_layout)
+        
+        layout.addWidget(control_panel)
+        
+        # Histogram container with proper sizing
         self.histogram_container = HistogramContainer(self)
         self.histogram_container.setStyleSheet("background-color: white; border: 1px solid #ccc; border-radius: 3px;")
-        self.histogram_container.setFixedHeight(270)  # Increased height to accommodate axis labels
+        self.histogram_container.setFixedHeight(240)  # Fixed height for histogram
         layout.addWidget(self.histogram_container)
         
-        # Add spacing between histogram and labels
-        spacer = QWidget()
-        spacer.setFixedHeight(55)
-        spacer.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)  # Allow mouse events to pass through
-        layout.addWidget(spacer)
+        # Scroll bar section with proper spacing
+        scroll_section = QWidget()
+        scroll_section.setFixedHeight(50)  # Fixed height for scroll section
+        scroll_section.setStyleSheet("border: 1px solid #ddd; border-radius: 3px;")
+        scroll_layout = QVBoxLayout(scroll_section)
+        scroll_layout.setContentsMargins(8, 5, 8, 5)
+        scroll_layout.setSpacing(3)
+        
+        # Scroll bar label
+        scroll_label = QLabel("Navigate Histogram:")
+        scroll_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        scroll_label.setStyleSheet("font-size: 10px; color: #666;")
+        scroll_label.setFixedHeight(15)
+        scroll_layout.addWidget(scroll_label)
+        
+        # Horizontal scroll bar
+        self.scroll_bar = QScrollBar(Qt.Orientation.Horizontal)
+        self.scroll_bar.setMinimum(0)
+        self.scroll_bar.setMaximum(100)
+        self.scroll_bar.setValue(0)
+        self.scroll_bar.setPageStep(10)
+        self.scroll_bar.setFixedHeight(20)
+        self.scroll_bar.valueChanged.connect(self.on_scroll_changed)
+        scroll_layout.addWidget(self.scroll_bar)
+        
+        layout.addWidget(scroll_section)
+        
+        # Pixel counter section
+        counter_section = QWidget()
+        counter_section.setFixedHeight(70)  # Fixed height for counter section
+        counter_section.setStyleSheet("border: 1px solid #ddd; border-radius: 3px;")
+        counter_layout = QVBoxLayout(counter_section)
+        counter_layout.setContentsMargins(8, 8, 8, 8)
+        counter_layout.setSpacing(5)
         
         # Add pixel counter below the histogram
         self.pixel_counter_label = QLabel("Pixels in selected range: 0")
         self.pixel_counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.pixel_counter_label.setStyleSheet("font-size: 12px; color: black; background-color: #f0f0f0; padding: 5px; border-radius: 3px; border: 1px solid #ccc;")
-        layout.addWidget(self.pixel_counter_label)
-        
-        # Add spacing between the two labels
-        label_spacer = QWidget()
-        label_spacer.setFixedHeight(5)
-        label_spacer.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)  # Allow mouse events to pass through
-        layout.addWidget(label_spacer)
+        self.pixel_counter_label.setFixedHeight(25)
+        counter_layout.addWidget(self.pixel_counter_label)
         
         # Add total pixel count and percentage
         self.total_pixel_label = QLabel("Total image pixels: 0")
         self.total_pixel_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.total_pixel_label.setStyleSheet("font-size: 11px; color: #666; background-color: #f8f8f8; padding: 3px; border-radius: 2px; border: 1px solid #ddd;")
-        layout.addWidget(self.total_pixel_label)
+        self.total_pixel_label.setFixedHeight(20)
+        counter_layout.addWidget(self.total_pixel_label)
+        
+        layout.addWidget(counter_section)
+        
+        # Add stretch to push everything to the top
+        layout.addStretch()
+        
+    def on_zoom_changed(self, zoom_text):
+        """Handle zoom level changes"""
+        zoom_map = {"1x": 1, "2x": 2, "3x": 3}
+        self.zoom_level = zoom_map.get(zoom_text, 1)
+        
+        # Reset scroll position when zoom changes
+        self.scroll_position = 0.0
+        self.scroll_bar.setValue(0)
+        
+        # Update scroll bar range based on zoom level
+        max_scroll = max(0, 100 - (100 // self.zoom_level))
+        self.scroll_bar.setMaximum(max_scroll)
+        
+        # Update the display
+        self.histogram_container.update()
+        self.update_pixel_counter()
+        
+    def on_scroll_changed(self, value):
+        """Handle scroll bar changes"""
+        self.scroll_position = value / 100.0
+        self.histogram_container.update()
+        self.update_pixel_counter()
         
     def toggle_highlighting(self):
         """Toggle highlighting on/off"""
@@ -356,6 +481,13 @@ class HistogramWidget(QWidget):
         self.red_histogram = np.histogram(arr[:, :, 0], bins=256, range=(0, 256))[0]
         self.green_histogram = np.histogram(arr[:, :, 1], bins=256, range=(0, 256))[0]
         self.blue_histogram = np.histogram(arr[:, :, 2], bins=256, range=(0, 256))[0]
+        
+        # Reset zoom and scroll when new image is loaded
+        self.zoom_level = 1
+        self.zoom_combo.setCurrentText("1x")
+        self.scroll_position = 0.0
+        self.scroll_bar.setValue(0)
+        self.scroll_bar.setMaximum(0)  # No scrolling needed at 1x zoom
         
         # Update the display
         self.histogram_container.update()
