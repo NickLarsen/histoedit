@@ -291,6 +291,7 @@ class HistogramWidget(QWidget):
         # Add spacing between histogram and labels
         spacer = QWidget()
         spacer.setFixedHeight(55)
+        spacer.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)  # Allow mouse events to pass through
         layout.addWidget(spacer)
         
         # Add pixel counter below the histogram
@@ -302,6 +303,7 @@ class HistogramWidget(QWidget):
         # Add spacing between the two labels
         label_spacer = QWidget()
         label_spacer.setFixedHeight(5)
+        label_spacer.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)  # Allow mouse events to pass through
         layout.addWidget(label_spacer)
         
         # Add total pixel count and percentage
@@ -347,7 +349,8 @@ class HistogramWidget(QWidget):
         arr = np.frombuffer(ptr, np.uint8).reshape((height, width, 4))
         
         # Store original image data for processing
-        self.original_image_array = arr.copy()
+        # Make sure we have a completely independent copy
+        self.original_image_array = arr.copy().astype(np.uint8)
         
         # Calculate histograms for each channel
         self.red_histogram = np.histogram(arr[:, :, 0], bins=256, range=(0, 256))[0]
@@ -386,7 +389,7 @@ class HistogramWidget(QWidget):
         return mask
         
     def get_highlighted_image(self):
-        """Get the image with highlight overlay and brightness adjustment"""
+        """Get the image with white mask overlay"""
         if self.original_image_array is None or not self.highlight_enabled:
             return None
             
@@ -395,22 +398,18 @@ class HistogramWidget(QWidget):
         if mask is None:
             return None
             
-        # Create a copy of the original image for processing
-        result = self.original_image_array.copy()
+        # Create a deep copy of the original image for processing
+        # Use numpy's copy with explicit order to ensure complete isolation
+        result = np.array(self.original_image_array, copy=True, dtype=np.uint8, order='C')
         
-        # Apply brightness adjustment to highlighted pixels
-        # We'll brighten the highlighted pixels to make them more visible
-        brightness_boost = 50  # Increase brightness by this amount
-        
-        # Apply brightness boost to all channels for highlighted pixels
-        for channel_idx in range(3):  # RGB channels only
-            channel_data = result[:, :, channel_idx]
-            # Only modify pixels that are highlighted (mask is True)
-            highlighted_pixels = channel_data[mask]
-            if highlighted_pixels.size > 0:
-                # Boost brightness for highlighted pixels
-                boosted_pixels = np.clip(highlighted_pixels + brightness_boost, 0, 255)
-                channel_data[mask] = boosted_pixels
+        # Make highlighted pixels pure white
+        if np.any(mask):
+            # Create a copy of the mask to avoid any potential reference issues
+            mask_copy = mask.copy()
+            # Apply white color to highlighted pixels
+            result[mask_copy, 0] = 255  # Red channel = 255
+            result[mask_copy, 1] = 255  # Green channel = 255
+            result[mask_copy, 2] = 255  # Blue channel = 255
         
         return result
         

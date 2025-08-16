@@ -110,6 +110,9 @@ class HistoEditMainWindow(QMainWindow):
         highlighted_array = self.control_panel.histogram_widget.get_highlighted_image()
         
         if highlighted_array is not None:
+            # Create a completely independent copy to prevent corruption
+            highlighted_array_copy = highlighted_array.copy()
+            
             # Get highlight parameters from histogram widget
             histogram_widget = self.control_panel.histogram_widget
             center = histogram_widget.highlight_center
@@ -117,7 +120,7 @@ class HistoEditMainWindow(QMainWindow):
             enabled = histogram_widget.highlight_enabled
             
             # Set the highlighted image in the viewer with parameters
-            self.image_viewer.set_highlighted_image(highlighted_array, center, width, enabled)
+            self.image_viewer.set_highlighted_image(highlighted_array_copy, center, width, enabled)
         else:
             # Clear the highlight if none is available
             self.image_viewer.clear_highlight()
