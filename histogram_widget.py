@@ -127,11 +127,13 @@ class HistogramContainer(QWidget):
         end_bin = start_bin + total_visible_bins
         
         # Find maximum value for normalization in the visible range
-        max_value = max(
-            np.max(self.parent_widget.red_histogram[start_bin:end_bin]),
-            np.max(self.parent_widget.green_histogram[start_bin:end_bin]),
-            np.max(self.parent_widget.blue_histogram[start_bin:end_bin])
-        )
+        max_value = 0
+        if self.parent_widget.red_channel_enabled:
+            max_value = max(max_value, np.max(self.parent_widget.red_histogram[start_bin:end_bin]))
+        if self.parent_widget.green_channel_enabled:
+            max_value = max(max_value, np.max(self.parent_widget.green_histogram[start_bin:end_bin]))
+        if self.parent_widget.blue_channel_enabled:
+            max_value = max(max_value, np.max(self.parent_widget.blue_histogram[start_bin:end_bin]))
         
         if max_value == 0:
             return
@@ -146,49 +148,58 @@ class HistogramContainer(QWidget):
         log_blue = np.log(self.parent_widget.blue_histogram[start_bin:end_bin] + 1)
         
         # Find maximum log value for normalization
-        max_log_value = max(np.max(log_red), np.max(log_green), np.max(log_blue))
+        max_log_value = 0
+        if self.parent_widget.red_channel_enabled:
+            max_log_value = max(max_log_value, np.max(log_red))
+        if self.parent_widget.green_channel_enabled:
+            max_log_value = max(max_log_value, np.max(log_green))
+        if self.parent_widget.blue_channel_enabled:
+            max_log_value = max(max_log_value, np.max(log_blue))
         
         # Draw red histogram (50% transparency fill, 90% transparency line)
         red_fill = QColor(255, 0, 0, 128)  # 50% transparency
         red_line = QColor(255, 0, 0, 26)   # 90% transparency
         
-        painter.setBrush(QBrush(red_fill))
-        painter.setPen(QPen(red_line, 1))
-        
-        for i in range(total_visible_bins):
-            x = hist_x + i * bar_width
-            # Use logarithmic normalization
-            normalized_height = (log_red[i] / max_log_value) * hist_height
-            y = hist_y + hist_height - normalized_height
-            painter.drawRect(QRect(int(x), int(y), int(bar_width), int(normalized_height)))
+        if self.parent_widget.red_channel_enabled:
+            painter.setBrush(QBrush(red_fill))
+            painter.setPen(QPen(red_line, 1))
+            
+            for i in range(total_visible_bins):
+                x = hist_x + i * bar_width
+                # Use logarithmic normalization
+                normalized_height = (log_red[i] / max_log_value) * hist_height
+                y = hist_y + hist_height - normalized_height
+                painter.drawRect(QRect(int(x), int(y), int(bar_width), int(normalized_height)))
             
         # Draw green histogram
         green_fill = QColor(0, 255, 0, 128)  # 50% transparency
         green_line = QColor(0, 255, 0, 26)   # 90% transparency
         
-        painter.setBrush(QBrush(green_fill))
-        painter.setPen(QPen(green_line, 1))
-        
-        for i in range(total_visible_bins):
-            x = hist_x + i * bar_width
-            # Use logarithmic normalization
-            normalized_height = (log_green[i] / max_log_value) * hist_height
-            y = hist_y + hist_height - normalized_height
-            painter.drawRect(QRect(int(x), int(y), int(bar_width), int(normalized_height)))
+        if self.parent_widget.green_channel_enabled:
+            painter.setBrush(QBrush(green_fill))
+            painter.setPen(QPen(green_line, 1))
+            
+            for i in range(total_visible_bins):
+                x = hist_x + i * bar_width
+                # Use logarithmic normalization
+                normalized_height = (log_green[i] / max_log_value) * hist_height
+                y = hist_y + hist_height - normalized_height
+                painter.drawRect(QRect(int(x), int(y), int(bar_width), int(normalized_height)))
             
         # Draw blue histogram
         blue_fill = QColor(0, 0, 255, 128)  # 50% transparency
         blue_line = QColor(0, 0, 255, 26)   # 90% transparency
         
-        painter.setBrush(QBrush(blue_fill))
-        painter.setPen(QPen(blue_line, 1))
-        
-        for i in range(total_visible_bins):
-            x = hist_x + i * bar_width
-            # Use logarithmic normalization
-            normalized_height = (log_blue[i] / max_log_value) * hist_height
-            y = hist_y + hist_height - normalized_height
-            painter.drawRect(QRect(int(x), int(y), int(bar_width), int(normalized_height)))
+        if self.parent_widget.blue_channel_enabled:
+            painter.setBrush(QBrush(blue_fill))
+            painter.setPen(QPen(blue_line, 1))
+            
+            for i in range(total_visible_bins):
+                x = hist_x + i * bar_width
+                # Use logarithmic normalization
+                normalized_height = (log_blue[i] / max_log_value) * hist_height
+                y = hist_y + hist_height - normalized_height
+                painter.drawRect(QRect(int(x), int(y), int(bar_width), int(normalized_height)))
             
         # Draw highlight overlay only if enabled
         if hasattr(self.parent_widget, 'highlight_enabled') and self.parent_widget.highlight_enabled:
@@ -283,6 +294,11 @@ class HistogramWidget(QWidget):
         self.highlight_center = 0.5  # Center position (0.0 to 1.0)
         self.highlight_width = 0.1   # Width as fraction (0.0 to 1.0)
         
+        # Channel toggle state
+        self.red_channel_enabled = True
+        self.green_channel_enabled = True
+        self.blue_channel_enabled = True
+        
         # Zoom and scroll state
         self.zoom_level = 1  # 1x, 2x, or 3x zoom
         self.scroll_position = 0.0  # 0.0 to 1.0, represents position in scrollable area
@@ -329,6 +345,31 @@ class HistogramWidget(QWidget):
         self.lock_button.clicked.connect(self.toggle_lock)
         self.lock_button.setFixedSize(40, 28)  # Make it square-ish for the emoji
         highlight_layout.addWidget(self.lock_button)
+        
+        # Channel toggle buttons
+        self.red_toggle = QPushButton("🔴")
+        self.red_toggle.setCheckable(True)
+        self.red_toggle.setChecked(True)
+        self.red_toggle.clicked.connect(self.toggle_red_channel)
+        self.red_toggle.setFixedSize(40, 28)
+        self.red_toggle.setToolTip("Toggle Red Channel")
+        highlight_layout.addWidget(self.red_toggle)
+        
+        self.green_toggle = QPushButton("🟢")
+        self.green_toggle.setCheckable(True)
+        self.green_toggle.setChecked(True)
+        self.green_toggle.clicked.connect(self.toggle_green_channel)
+        self.green_toggle.setFixedSize(40, 28)
+        self.green_toggle.setToolTip("Toggle Green Channel")
+        highlight_layout.addWidget(self.green_toggle)
+        
+        self.blue_toggle = QPushButton("🔵")
+        self.blue_toggle.setCheckable(True)
+        self.blue_toggle.setChecked(True)
+        self.blue_toggle.clicked.connect(self.toggle_blue_channel)
+        self.blue_toggle.setFixedSize(40, 28)
+        self.blue_toggle.setToolTip("Toggle Blue Channel")
+        highlight_layout.addWidget(self.blue_toggle)
         
         highlight_layout.addStretch()  # Push buttons to the left
         control_layout.addLayout(highlight_layout)
@@ -457,6 +498,30 @@ class HistogramWidget(QWidget):
         else:
             self.lock_button.setText("🔓")  # Unlocked emoji
         
+    def toggle_red_channel(self):
+        """Toggle the red channel on/off"""
+        self.red_channel_enabled = not self.red_channel_enabled
+        self.red_toggle.setChecked(self.red_channel_enabled)
+        self.histogram_container.update()
+        self.update_pixel_counter()
+        self.highlight_changed.emit()
+        
+    def toggle_green_channel(self):
+        """Toggle the green channel on/off"""
+        self.green_channel_enabled = not self.green_channel_enabled
+        self.green_toggle.setChecked(self.green_channel_enabled)
+        self.histogram_container.update()
+        self.update_pixel_counter()
+        self.highlight_changed.emit()
+        
+    def toggle_blue_channel(self):
+        """Toggle the blue channel on/off"""
+        self.blue_channel_enabled = not self.blue_channel_enabled
+        self.blue_toggle.setChecked(self.blue_channel_enabled)
+        self.histogram_container.update()
+        self.update_pixel_counter()
+        self.highlight_changed.emit()
+        
     def set_image(self, pixmap):
         """Calculate and display histogram for the given image"""
         if pixmap is None:
@@ -489,6 +554,14 @@ class HistogramWidget(QWidget):
         self.scroll_position = 0.0
         self.scroll_bar.setValue(0)
         self.scroll_bar.setMaximum(0)  # No scrolling needed at 1x zoom
+        
+        # Reset channel toggles to enabled state
+        self.red_channel_enabled = True
+        self.green_channel_enabled = True
+        self.blue_channel_enabled = True
+        self.red_toggle.setChecked(True)
+        self.green_toggle.setChecked(True)
+        self.blue_toggle.setChecked(True)
         
         # Update the display
         self.histogram_container.update()
@@ -523,7 +596,14 @@ class HistogramWidget(QWidget):
         green_mask = (green_channel >= left_bin) & (green_channel <= right_bin)
         red_mask = (red_channel >= left_bin) & (red_channel <= right_bin)
         
-        mask = blue_mask | green_mask | red_mask  # Combine with OR operation
+        # Only include masks for enabled channels
+        mask = np.zeros((height, width), dtype=bool)
+        if self.blue_channel_enabled:
+            mask |= blue_mask
+        if self.green_channel_enabled:
+            mask |= green_mask
+        if self.red_channel_enabled:
+            mask |= red_mask
         
         return mask
         
