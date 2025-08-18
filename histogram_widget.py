@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QScrollBar, QComboBox
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QScrollBar, QComboBox, QSlider
 from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QPixmap
 from PyQt6.QtCore import Qt, QRect, pyqtSignal, QThread, QTimer, QMutex, QWaitCondition
 import numpy as np
@@ -56,6 +56,7 @@ class ImageProcessorThread(QThread):
         red_enabled = params['red_enabled']
         green_enabled = params['green_enabled']
         blue_enabled = params['blue_enabled']
+        brightness_level = params['brightness_level']
         
         height, width = image_array.shape[:2]
         
@@ -86,8 +87,27 @@ class ImageProcessorThread(QThread):
         if np.any(mask):
             # Only create a copy if we need to modify it
             result = np.array(image_array, copy=True, dtype=np.uint8, order='C')
-            # Use advanced indexing for better performance
-            result[mask, :3] = 255  # Set RGB channels to 255 for highlighted pixels
+            
+            # Apply brightness adjustment instead of white masking
+            # brightness_level is 0.0 to 1.0, representing 0% to 100% of max brightness
+            # Calculate how much to brighten each pixel
+            # For each pixel, we want to brighten it by moving it towards 255
+            # The amount of brightening is controlled by brightness_level
+            
+            # Get the masked pixels
+            masked_pixels = result[mask, :3]  # RGB channels only
+            
+            # Calculate the distance from current value to maximum (255)
+            distance_to_max = 255 - masked_pixels
+            
+            # Apply brightness adjustment: move towards max by brightness_level percentage
+            brightness_adjustment = distance_to_max * brightness_level
+            
+            # Add the adjustment to current values, ensuring we don't exceed 255
+            new_values = np.clip(masked_pixels + brightness_adjustment, 0, 255)
+            
+            # Update the result
+            result[mask, :3] = new_values.astype(np.uint8)
         else:
             # No highlighting needed, return original
             result = image_array
@@ -420,9 +440,12 @@ class HistogramWidget(QWidget):
         self.zoom_level = 1  # 1x, 2x, or 3x zoom
         self.scroll_position = 0.0  # 0.0 to 1.0, represents position in scrollable area
         
+        # Brightness slider state
+        self.brightness_level = 0.8  # 0.0 to 1.0, default to 80%
+        
         # Set fixed height to accommodate histogram + labels + controls
-        # Title: 35 + Control Panel: 80 + Histogram: 240 + Scroll: 50 + Counter: 70 + Spacing: 50 = 525
-        self.setFixedHeight(525)
+        # Title: 35 + Control Panel: 110 + Histogram: 240 + Scroll: 50 + Counter: 70 + Spacing: 50 = 555
+        self.setFixedHeight(555)
         
         # Initialize background thread
         self.image_processor = ImageProcessorThread()
@@ -457,7 +480,7 @@ class HistogramWidget(QWidget):
         
         # Control panel section
         control_panel = QWidget()
-        control_panel.setFixedHeight(80)  # Fixed height for control panel
+        control_panel.setFixedHeight(110)  # Increased height for brightness slider
         control_panel.setStyleSheet("border: 1px solid #ddd; border-radius: 3px;")
         control_layout = QVBoxLayout(control_panel)
         control_layout.setContentsMargins(8, 8, 8, 8)
@@ -527,6 +550,32 @@ class HistogramWidget(QWidget):
         
         zoom_layout.addStretch()
         control_layout.addLayout(zoom_layout)
+        
+        # Brightness slider row
+        brightness_layout = QHBoxLayout()
+        brightness_layout.setSpacing(8)
+        
+        brightness_label = QLabel("Brightness:")
+        brightness_label.setFixedWidth(80)
+        brightness_layout.addWidget(brightness_label)
+        
+        self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
+        self.brightness_slider.setMinimum(0)
+        self.brightness_slider.setMaximum(100)
+        self.brightness_slider.setValue(80)  # Default to 80%
+        self.brightness_slider.setPageStep(10)
+        self.brightness_slider.valueChanged.connect(self.on_brightness_changed)
+        self.brightness_slider.setFixedHeight(28)
+        brightness_layout.addWidget(self.brightness_slider)
+        
+        # Add brightness percentage label
+        self.brightness_value_label = QLabel("80%")
+        self.brightness_value_label.setFixedWidth(40)
+        self.brightness_value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.brightness_value_label.setStyleSheet("font-size: 11px; color: #666; background-color: #f8f8f8; padding: 3px; border-radius: 2px; border: 1px solid #ddd;")
+        brightness_layout.addWidget(self.brightness_value_label)
+        
+        control_layout.addLayout(brightness_layout)
         
         layout.addWidget(control_panel)
         
@@ -670,6 +719,14 @@ class HistogramWidget(QWidget):
         # Force immediate update when toggling channels
         self.force_highlight_update()
         
+    def on_brightness_changed(self, value):
+        """Handle brightness slider changes"""
+        self.brightness_level = value / 100.0
+        self.brightness_value_label.setText(f"{value}%")
+        self.histogram_container.update()
+        self.update_pixel_counter()
+        self.force_highlight_update()
+        
     def set_image(self, pixmap):
         """Calculate and display histogram for the given image"""
         if pixmap is None:
@@ -710,6 +767,11 @@ class HistogramWidget(QWidget):
         self.red_toggle.setChecked(True)
         self.green_toggle.setChecked(True)
         self.blue_toggle.setChecked(True)
+        
+        # Reset brightness to default 80%
+        self.brightness_level = 0.8
+        self.brightness_slider.setValue(80)
+        self.brightness_value_label.setText("80%")
         
         # Clear cache for new image
         self.highlight_mask = None
@@ -766,7 +828,7 @@ class HistogramWidget(QWidget):
         return mask
         
     def get_highlighted_image(self):
-        """Get the image with white mask overlay"""
+        """Get the image with brightness adjustment overlay"""
         if self.original_image_array is None or not self.highlight_enabled:
             return None
             
@@ -784,15 +846,25 @@ class HistogramWidget(QWidget):
         # Use numpy's copy with explicit order to ensure complete isolation
         result = np.array(self.original_image_array, copy=True, dtype=np.uint8, order='C')
         
-        # Make highlighted pixels pure white
+        # Apply brightness adjustment instead of white masking
         if np.any(mask):
             # Create a copy of the mask to avoid any potential reference issues
             mask_copy = mask.copy()
-            # Apply white color to highlighted pixels
-            # Note: QImage.bits() returns BGRA format, so channels are [Blue, Green, Red, Alpha]
-            result[mask_copy, 0] = 255  # Blue channel = 255
-            result[mask_copy, 1] = 255  # Green channel = 255
-            result[mask_copy, 2] = 255  # Red channel = 255
+            
+            # Get the masked pixels
+            masked_pixels = result[mask_copy, :3]  # RGB channels only
+            
+            # Calculate the distance from current value to maximum (255)
+            distance_to_max = 255 - masked_pixels
+            
+            # Apply brightness adjustment: move towards max by brightness_level percentage
+            brightness_adjustment = distance_to_max * self.brightness_level
+            
+            # Add the adjustment to current values, ensuring we don't exceed 255
+            new_values = np.clip(masked_pixels + brightness_adjustment, 0, 255)
+            
+            # Update the result
+            result[mask_copy, :3] = new_values.astype(np.uint8)
         
         return result
         
@@ -831,6 +903,12 @@ class HistogramWidget(QWidget):
         self.green_histogram = None
         self.blue_histogram = None
         self.original_image_array = None
+        
+        # Reset brightness to default 80%
+        self.brightness_level = 0.8
+        self.brightness_slider.setValue(80)
+        self.brightness_value_label.setText("80%")
+        
         self.histogram_container.update()
         self.update_pixel_counter()
         
@@ -871,7 +949,8 @@ class HistogramWidget(QWidget):
             self.highlight_width,
             self.red_channel_enabled,
             self.green_channel_enabled,
-            self.blue_channel_enabled
+            self.blue_channel_enabled,
+            self.brightness_level
         )
         
         # Check if we can use cached results
@@ -889,7 +968,8 @@ class HistogramWidget(QWidget):
             'highlight_width': self.highlight_width,
             'red_enabled': self.red_channel_enabled,
             'green_enabled': self.green_channel_enabled,
-            'blue_enabled': self.blue_channel_enabled
+            'blue_enabled': self.blue_channel_enabled,
+            'brightness_level': self.brightness_level
         }
         
         self.image_processor.request_processing(params)
